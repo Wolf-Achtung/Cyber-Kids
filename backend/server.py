@@ -364,19 +364,24 @@ async def create_report(r: ReportCreate):
 
 @api_router.get("/simulator/scenarios")
 async def scenarios():
+    import html as _html
     items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
     # Fallback if not seeded yet
     if not items:
         await initialize_seed_data()
         items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
-    # Ensure plain JSONable dicts
+    # Ensure plain JSONable dicts and decode any HTML entities
     clean = []
     for it in items:
+        hints = [
+            _html.unescape(h) if isinstance(h, str) else h
+            for h in it.get("hints", [])
+        ]
         clean.append({
             "id": it.get("id"),
-            "title": it.get("title"),
-            "message": it.get("message"),
-            "hints": it.get("hints", []),
+            "title": _html.unescape(it.get("title", "")),
+            "message": _html.unescape(it.get("message", "")),
+            "hints": hints,
         })
     return clean
 
