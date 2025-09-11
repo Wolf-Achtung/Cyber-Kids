@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700&amp;display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700&display=swap');
 
 :root{
   --bg:#0b1020;
@@ -55,6 +55,13 @@ body{ margin:0; font-family:'Figtree',system-ui,-apple-system,Segoe UI,Roboto,Ub
 
 .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
 .chip{ background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); }
+
+.highlights-block{ margin-top:14px; }
+.highlight-view{ background:#0c1226; border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; white-space:pre-wrap; line-height:1.7; }
+.hl{ border-radius:6px; padding:0 2px; }
+.hl.low{ background:rgba(47,211,164,0.25); box-shadow:0 0 0 1px rgba(47,211,164,0.25) inset; }
+.hl.mid{ background:rgba(240,164,75,0.28); box-shadow:0 0 0 1px rgba(240,164,75,0.25) inset; }
+.hl.high{ background:rgba(255,94,98,0.28); box-shadow:0 0 0 1px rgba(255,94,98,0.25) inset; }
 
 .explanation{ margin-top:14px; }
 .explanation h4, .suggestion h4{ margin:0 0 6px; }

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Body
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,25 +11,25 @@ import uuid
 from datetime import datetime, timezone
 import asyncio
 
-# Optional OpenAI integration (uses Emergent LLM key if present)
+# Optional OpenAI integration
 try:
     from openai import AsyncOpenAI
 except Exception:  # pragma: no cover
-    AsyncOpenAI = None  # Will be handled in health check and classify fallback
+    AsyncOpenAI = None
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection (MUST use env)
+# MongoDB connection (env only)
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app and prefixed router
+# FastAPI app + router with '/api'
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# Configure CORS (env-driven). Do not hardcode URLs.
+# CORS (env-driven)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -38,11 +38,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --------- Models ---------
@@ -59,6 +56,12 @@ class RiskCategory(BaseModel):
     confidence: float
     description: str
 
+class HighlightRange(BaseModel):
+    start: int
+    end: int
+    category: str
+    confidence: float
+
 class ClassificationRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000)
 
@@ -68,6 +71,7 @@ class ClassificationResponse(BaseModel):
     explanation: str
     suggested_reply: str
     processing_time: float
+    highlights: List[HighlightRange] = Field(default_factory=list)
 
 class ReportCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000)
@@ -92,7 +96,6 @@ def _safe_now() -> datetime:
     return datetime.now(timezone.utc)
 
 async def _insert_once_collection_flag(collection_name: str, flag_id: str) -> bool:
-    """Ensure we insert only once; returns True if insert should proceed."""
     existing = await db.initialization_flags.find_one({"_id": flag_id})
     if existing:
         return False
@@ -147,7 +150,7 @@ async def _import_docx_from_url(url: str) -> Optional[Guide]:
         return None
 
 async def initialize_seed_data():
-    # Seed a simple simulator scenario set
+    # Simulator scenarios
     try:
         if await _insert_once_collection_flag("simulator", "seed_scenarios_v1"):
             scenarios = [
@@ -174,7 +177,7 @@ async def initialize_seed_data():
     except Exception as e:  # pragma: no cover
         logger.warning(f"Simulator seeding issue: {e}")
 
-    # Best-effort guide import from user's provided URL
+    # Guide import from user file
     try:
         if await _insert_once_collection_flag("guides", "seed_guide_cybergrooming_docx_v1"):
             url = "https://customer-assets.emergentagent.com/job_30a6fdc8-b7c0-4978-9269-6e43b5538df0/artifacts/hxk084k9_cybergrooming-infos.docx"
@@ -185,7 +188,6 @@ async def initialize_seed_data():
 # --------- OpenAI Utilities ---------
 
 def get_openai_client() -> Optional[AsyncOpenAI]:
-    """Return AsyncOpenAI client if available and key provided."""
     if AsyncOpenAI is None:
         return None
     api_key = os.environ.get('EMERGENT_LLM_KEY') or os.environ.get('OPENAI_API_KEY')
@@ -197,13 +199,51 @@ def get_openai_client() -> Optional[AsyncOpenAI]:
         logger.warning(f"OpenAI client init failed: {e}")
         return None
 
+KEYWORD_MAP = {
+    "Secrecy Requests": ["secret", "don't tell", "privat", "geheim"],
+    "Meeting Requests": ["meet", "treffen", "come over", "visit"],
+    "Personal Information Seeking": ["age", "wie alt", "where do you live", "schule"],
+    "Sexual Content": ["nude", "sext", "sex", "kuss", "foto nur für mich"],
+    "Gift Offering": ["gift", "geschenk", "geld", "robux"],
+}
+
+CONFIDENCE_FOR = {
+    "Secrecy Requests": 0.9,
+    "Meeting Requests": 0.8,
+    "Personal Information Seeking": 0.7,
+    "Sexual Content": 0.95,
+    "Gift Offering": 0.6,
+}
+
+def _heuristic_highlights(text: str) -> List[HighlightRange]:
+    t = text.lower()
+    spans: List[HighlightRange] = []
+    for cat, keys in KEYWORD_MAP.items():
+        for k in keys:
+            start = 0
+            lk = k.lower()
+            while True:
+                idx = t.find(lk, start)
+                if idx == -1:
+                    break
+                spans.append(HighlightRange(start=idx, end=idx+len(lk), category=cat, confidence=CONFIDENCE_FOR.get(cat, 0.5)))
+                start = idx + len(lk)
+    # dedupe simple
+    unique = []
+    seen = set()
+    for s in spans:
+        key = (s.start, s.end, s.category)
+        if key not in seen:
+            seen.add(key)
+            unique.append(s)
+    return unique
+
 async def llm_classify(text: str) -> ClassificationResponse:
-    import time
+    import time, json
     start = time.time()
 
-    # Attempt LLM path
     client = get_openai_client()
-    model_pref = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+    model_pref = os.environ.get('OPENAI_MODEL', 'gpt-5')  # per Wunsch auf gpt-5
 
     system_prompt = (
         "Du bist ein Content-Safety-Analyst mit Fokus auf Cybergrooming-Prävention. "
@@ -215,27 +255,26 @@ Analysiere folgenden Text auf mögliche Grooming-Risiken. Antworte als JSON mit 
 - overall_risk_score: Zahl [0..1]
 - explanation: Text
 - suggested_reply: kurze kindersichere Antwort
+- highlights: Liste von Objekten {{start, end, category, confidence}} mit 0-basierter Zeichenindexierung bezogen auf den exakten TEXT unten
 
 TEXT:\n{text}
 """
+
+    highlights: List[HighlightRange] = []
 
     if client:
         try:
             resp = await client.chat.completions.create(
                 model=model_pref,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=600,
                 response_format={"type": "json_object"},
             )
             content = resp.choices[0].message.content or "{}"
-            import json
             data = json.loads(content)
-            # Validate and coerce
-            cats = []
+            # Parse categories
+            cats: List[RiskCategory] = []
             for c in data.get("risk_categories", [])[:10]:
                 try:
                     cats.append(RiskCategory(
@@ -245,48 +284,63 @@ TEXT:\n{text}
                     ))
                 except Exception:
                     continue
+            # Parse highlights
+            if isinstance(data.get("highlights"), list):
+                n = len(text)
+                for h in data["highlights"][:50]:
+                    try:
+                        s = int(h.get("start", 0))
+                        e = int(h.get("end", 0))
+                        if 0 <= s < e <= n:
+                            highlights.append(HighlightRange(
+                                start=s,
+                                end=e,
+                                category=str(h.get("category", "Risk"))[:64],
+                                confidence=float(h.get("confidence", 0.5)),
+                            ))
+                    except Exception:
+                        continue
+            # Fallback if none returned
+            if not highlights:
+                highlights = _heuristic_highlights(text)
+
             overall = float(data.get("overall_risk_score", max([x.confidence for x in cats], default=0.0)))
             explanation = str(data.get("explanation", "")).strip() or "Analyse abgeschlossen."
             suggested = str(data.get("suggested_reply", "")).strip() or "Ich möchte darüber mit einem Erwachsenen sprechen."
             return ClassificationResponse(
-                risk_categories=cats or [
-                    RiskCategory(category="Unklar", confidence=0.1, description="Keine klare Kategorie erkannt")
-                ],
+                risk_categories=cats or [RiskCategory(category="Unklar", confidence=0.1, description="Keine klare Kategorie erkannt")],
                 overall_risk_score=max(0.0, min(1.0, overall)),
                 explanation=explanation,
                 suggested_reply=suggested,
                 processing_time=time.time() - start,
+                highlights=highlights,
             )
         except Exception as e:
             logger.warning(f"LLM classify failed, falling back: {e}")
 
-    # Fallback: lightweight heuristic if LLM unavailable
+    # Heuristic fallback
     text_l = text.lower()
-    rules = [
-        ("Secrecy Requests", 0.9, any(k in text_l for k in ["secret", "don't tell", "privat", "geheim"])) ,
-        ("Meeting Requests", 0.8, any(k in text_l for k in ["meet", "treffen", "come over", "visit"])) ,
-        ("Personal Information Seeking", 0.7, any(k in text_l for k in ["age", "wie alt", "where do you live", "schule"])) ,
-        ("Sexual Content", 0.95, any(k in text_l for k in ["nude", "sext", "sex", "kuss", "foto nur für mich"])) ,
-        ("Gift Offering", 0.6, any(k in text_l for k in ["gift", "geschenk", "geld", "robux"])) ,
-    ]
-    cats = [RiskCategory(category=n, confidence=s, description=f"Heuristik erkannte Muster für {n}.") for n, s, cond in rules if cond]
-    if not cats:
-        cats = [RiskCategory(category="Safe Content", confidence=0.9, description="Kein auffälliges Muster gefunden.")]
+    cats_fb: List[RiskCategory] = []
+    for cat, keys in KEYWORD_MAP.items():
+        if any(k in text_l for k in keys):
+            cats_fb.append(RiskCategory(category=cat, confidence=CONFIDENCE_FOR.get(cat, 0.5), description=f"Heuristik erkannte Muster für {cat}."))
+    if not cats_fb:
+        cats_fb = [RiskCategory(category="Safe Content", confidence=0.9, description="Kein auffälliges Muster gefunden.")]
         overall = 0.1
         suggested = "Danke für die Nachricht!"
         explanation = "Die Nachricht wirkt unbedenklich."
     else:
-        overall = max(c.confidence for c in cats)
+        overall = max(c.confidence for c in cats_fb)
         suggested = "Ich fühle mich unwohl und werde mit einer vertrauten Person darüber sprechen."
-        explanation = f"Es wurden {len(cats)} Risikokategorien erkannt. Bitte vorsichtig sein."
+        explanation = f"Es wurden {len(cats_fb)} Risikokategorien erkannt. Bitte vorsichtig sein."
 
-    import time as _t
     return ClassificationResponse(
-        risk_categories=cats,
+        risk_categories=cats_fb,
         overall_risk_score=overall,
         explanation=explanation,
         suggested_reply=suggested,
-        processing_time=_t.time() - start,
+        processing_time=time.time() - start,
+        highlights=_heuristic_highlights(text),
     )
 
 # --------- Routes ---------
@@ -308,17 +362,12 @@ async def get_status_checks():
 @api_router.get("/health")
 async def health():
     key_present = bool(os.environ.get('EMERGENT_LLM_KEY') or os.environ.get('OPENAI_API_KEY'))
-    return {
-        "status": "ok",
-        "mongo": True,
-        "llm_ready": key_present and (AsyncOpenAI is not None),
-    }
+    return {"status": "ok", "mongo": True, "llm_ready": key_present and (AsyncOpenAI is not None)}
 
 @api_router.post("/classify", response_model=ClassificationResponse)
 async def classify(req: ClassificationRequest):
     try:
-        result = await llm_classify(req.text)
-        return result
+        return await llm_classify(req.text)
     except HTTPException:
         raise
     except Exception as e:
@@ -335,48 +384,31 @@ async def get_guides():
             guides.append(Guide(id=g.get("id"), title=g.get("title", "Guide"), sections=sections))
         except Exception:
             continue
-    # If empty, provide minimal built-in tips
     if not guides:
-        guides = [
-            Guide(
-                id=str(uuid.uuid4()),
-                title="Schnell-Tipps gegen Cybergrooming",
-                sections=[
-                    GuideSection(title="Nicht teilen", content="Keine Adresse, Schule, Telefonnummer teilen."),
-                    GuideSection(title="Screenshots sichern", content="Beweise sichern, bevor du blockierst."),
-                    GuideSection(title="Vertrauensperson", content="Rede mit Eltern, Lehrkraft oder Beratung."),
-                ],
-            )
-        ]
+        guides = [Guide(id=str(uuid.uuid4()), title="Schnell-Tipps gegen Cybergrooming", sections=[
+            GuideSection(title="Nicht teilen", content="Keine Adresse, Schule, Telefonnummer teilen."),
+            GuideSection(title="Screenshots sichern", content="Beweise sichern, bevor du blockierst."),
+            GuideSection(title="Vertrauensperson", content="Rede mit Eltern, Lehrkraft oder Beratung."),
+        ])]
     return guides
 
 @api_router.post("/reports", response_model=ReportResponse)
 async def create_report(r: ReportCreate):
     rid = str(uuid.uuid4())
     now = _safe_now()
-    await db.reports.insert_one({
-        "id": rid,
-        "text": r.text,
-        "contact": r.contact,
-        "created_at": now.isoformat(),
-    })
+    await db.reports.insert_one({"id": rid, "text": r.text, "contact": r.contact, "created_at": now.isoformat()})
     return ReportResponse(id=rid, created_at=now)
 
 @api_router.get("/simulator/scenarios")
 async def scenarios():
     import html as _html
     items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
-    # Fallback if not seeded yet
     if not items:
         await initialize_seed_data()
         items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
-    # Ensure plain JSONable dicts and decode any HTML entities
     clean = []
     for it in items:
-        hints = [
-            _html.unescape(h) if isinstance(h, str) else h
-            for h in it.get("hints", [])
-        ]
+        hints = [_html.unescape(h) if isinstance(h, str) else h for h in it.get("hints", [])]
         clean.append({
             "id": it.get("id"),
             "title": _html.unescape(it.get("title", "")),
@@ -385,12 +417,11 @@ async def scenarios():
         })
     return clean
 
-# Include router
+# Mount router
 app.include_router(api_router)
 
 @app.on_event("startup")
 async def on_startup():
-    # Best-effort async initializations
     asyncio.create_task(initialize_seed_data())
 
 @app.on_event("shutdown")
