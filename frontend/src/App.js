@@ -15,9 +15,10 @@ import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from "
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Toaster } from "sonner";
 import { toast } from "sonner";
-import { ShieldCheck, AlertTriangle, MessageCircle, Send, Phone, Share2, Copy, Shield, FileText, X } from "lucide-react";
+import { ShieldCheck, AlertTriangle, MessageCircle, Send, Phone, Share2, Copy, Shield, FileText, X, Link as LinkIcon } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -27,6 +28,30 @@ function riskClass(score) {
   if (score >= 0.4) return "mid";
   return "low";
 }
+
+// Erklärtexte zu Kategorien für Popover
+const CATEGORY_EXPLAINS = {
+  "Secrecy Requests": {
+    explain: "Jemand will, dass du es geheim hältst oder privat bleibst. Das ist ein starkes Warnsignal.",
+    good: "Sag: Ich möchte das nicht geheim halten und rede mit einer vertrauten Person.",
+  },
+  "Meeting Requests": {
+    explain: "Vorschläge, sich alleine zu treffen – oft, ohne anderen davon zu erzählen.",
+    good: "Sag: Ich treffe mich nicht mit Fremden. Ich spreche mit meinen Eltern.",
+  },
+  "Personal Information Seeking": {
+    explain: "Es werden persönliche Daten abgefragt (Alter, Adresse, Schule...).",
+    good: "Teile keine Daten. Du kannst die Frage ignorieren und eine erwachsene Person informieren.",
+  },
+  "Sexual Content": {
+    explain: "Sexuelle Anspielungen oder Aufforderungen sind nicht okay und müssen gestoppt werden.",
+    good: "Beende den Chat, sichere Beweise, sprich mit einer Vertrauensperson.",
+  },
+  "Gift Offering": {
+    explain: "Geschenke oder Geld als Lockmittel, um dich zu etwas zu bewegen.",
+    good: "Lehne ab und blockiere. Erzähl es jemandem, dem du vertraust.",
+  },
+};
 
 function usePoints() {
   const [userPoints, setUserPoints] = useState(() => Number(localStorage.getItem("cgk_points") || 0));
@@ -51,7 +76,7 @@ function usePoints() {
   const computeBadges = (pts) => {
     const earned = thresholds.filter(t => pts >= t.pts).map(t => t.name);
     return Array.from(new Set(earned));
-    };
+  };
 
   const award = async (points, reason) => {
     const safe = Math.max(1, Math.min(100, Number(points || 0)));
@@ -115,9 +140,18 @@ function HighlightedText({ text, highlights }) {
     <pre className="highlight-view">
       {segs.map((s, idx) =>
         s.tag ? (
-          <span key={idx} className={`hl ${riskClass(s.tag.confidence)}`} title={`${s.tag.category} · ${(s.tag.confidence * 100).toFixed(0)}%`}>
-            {s.text}
-          </span>
+          <Popover key={idx}>
+            <PopoverTrigger asChild>
+              <span className={`hl ${riskClass(s.tag.confidence)} tapable`}>{s.text}</span>
+            </PopoverTrigger>
+            <PopoverContent className="hl-popover" align="start">
+              <div className="hl-popover-inner">
+                <div className="hl-popover-title">{s.tag.category} · {(s.tag.confidence * 100).toFixed(0)}%</div>
+                <div className="hl-popover-body">{CATEGORY_EXPLAINS[s.tag.category]?.explain || "Auffällige Stelle – handle vorsichtig und sprich mit einer Vertrauensperson."}</div>
+                <div className="hl-popover-good"><strong>Gute Reaktion:</strong> {CATEGORY_EXPLAINS[s.tag.category]?.good || "Beende den Chat, sichere Beweise, sprich mit einer Vertrauensperson."}</div>
+              </div>
+            </PopoverContent>
+          </Popover>
         ) : (
           <span key={idx}>{s.text}</span>
         ),
@@ -239,6 +273,66 @@ function ChatCheck() {
   );
 }
 
+function PlatformGuides() {
+  const guides = [
+    {
+      name: "WhatsApp",
+      block: ["Chat öffnen", "Oben auf Namen tippen", "Nach unten → Blockieren"],
+      report: ["Nachrichten antippen und halten", "›Melden‹ auswählen", "Anweisungen folgen"],
+      link: "https://faq.whatsapp.com/",
+    },
+    {
+      name: "Instagram",
+      block: ["Profil öffnen", "Oben rechts …", "›Blockieren‹"],
+      report: ["Nachricht/Profil öffnen", "… → ›Melden‹", "Grund wählen"],
+      link: "https://help.instagram.com/",
+    },
+    {
+      name: "Discord",
+      block: ["Benutzer-Name klicken", "Profil → …", "›Blockieren‹"],
+      report: ["Nachricht mit Rechtsklick/Tippen", "›Melden‹ oder Formular-Link", "Anweisungen folgen"],
+      link: "https://support.discord.com/hc/de",
+    },
+    {
+      name: "Snapchat",
+      block: ["Chat/Liste öffnen", "Auf Namen tippen → Einstellungen", "›Blockieren‹"],
+      report: ["Profil/Chat öffnen", "… → ›Melden‹", "Grund auswählen"],
+      link: "https://support.snapchat.com/",
+    },
+  ];
+
+  return (
+    <Card className="mb-6">
+      <CardHeader>
+        <CardTitle>Plattform‑Wegweiser</CardTitle>
+        <CardDescription>Blockieren & Melden – die wichtigsten Wege in 3 Schritten</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="pg-grid">
+          {guides.map((g) => (
+            <div key={g.name} className="pg-card">
+              <div className="pg-head">
+                <strong>{g.name}</strong>
+                <a href={g.link} target="_blank" rel="noreferrer" className="pg-link"><LinkIcon size={14}/> Hilfe</a>
+              </div>
+              <div className="pg-steps">
+                <div>
+                  <div className="pg-label">Blockieren</div>
+                  <ol>{g.block.map((s, i) => <li key={i}>{s}</li>)}</ol>
+                </div>
+                <div>
+                  <div className="pg-label">Melden</div>
+                  <ol>{g.report.map((s, i) => <li key={i}>{s}</li>)}</ol>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function Lernhub({ award }) {
   const [guides, setGuides] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -268,6 +362,9 @@ function Lernhub({ award }) {
     <div className="section">
       <h2 className="section-title"><ShieldCheck size={22} /> Lernhub</h2>
       <p className="muted">Lerne Warnsignale zu erkennen und richtig zu reagieren.</p>
+
+      <PlatformGuides />
+
       {loading ? (
         <p className="muted">Lade Inhalte…</p>
       ) : (
@@ -495,7 +592,6 @@ function EmergencyControls() {
   const [manageOpen, setManageOpen] = useState(false);
 
   const quickExit = () => {
-    // Panik: Leite auf neutrale Seite um
     window.location.href = "https://www.wikipedia.org";
   };
 
