@@ -85,6 +85,9 @@ body{ margin:0; font-family:'Figtree',system-ui,-apple-system,Segoe UI,Roboto,Ub
 .pg-steps{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .pg-label{ font-size:12px; color:var(--muted); margin-bottom:4px; }
 
+.sharebar{ margin-bottom:12px; padding:8px 10px; border-radius:10px; font-size:13px; }
+.sharebar.ok{ background:rgba(24,182,146,0.12); border:1px solid rgba(24,182,146,0.35); }
+
 .footer{ border-top:1px solid rgba(255,255,255,0.06); margin-top:32px; }
 .foot-grid{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
 
