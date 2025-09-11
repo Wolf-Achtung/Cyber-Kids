@@ -90,6 +90,18 @@ class Guide(BaseModel):
     title: str
     sections: List[GuideSection]
 
+class CommunityStatus(BaseModel):
+    community_total: int
+    monthly_goal: int
+
+class AwardRequest(BaseModel):
+    points: int = Field(ge=1, le=100)
+    reason: str
+
+class AwardResponse(BaseModel):
+    community_total: int
+    monthly_goal: int
+
 # --------- Helpers ---------
 
 def _safe_now() -> datetime:
@@ -185,6 +197,18 @@ async def initialize_seed_data():
     except Exception as e:  # pragma: no cover
         logger.warning(f"Guide seeding issue: {e}")
 
+    # Community progress seed
+    try:
+        if await _insert_once_collection_flag("community", "seed_community_goal_v1"):
+            await db.community.insert_one({
+                "id": "community_main",
+                "total_points": 0,
+                "monthly_goal": 5000,
+                "updated_at": _safe_now().isoformat(),
+            })
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"Community seeding issue: {e}")
+
 # --------- OpenAI Utilities ---------
 
 def get_openai_client() -> Optional[AsyncOpenAI]:
@@ -243,7 +267,7 @@ async def llm_classify(text: str) -> ClassificationResponse:
     start = time.time()
 
     client = get_openai_client()
-    model_pref = os.environ.get('OPENAI_MODEL', 'gpt-5')  # per Wunsch auf gpt-5
+    model_pref = os.environ.get('OPENAI_MODEL', 'gpt-5')  # Wunsch: gpt-5
 
     system_prompt = (
         "Du bist ein Content-Safety-Analyst mit Fokus auf Cybergrooming-Prävention. "
@@ -300,7 +324,6 @@ TEXT:\n{text}
                             ))
                     except Exception:
                         continue
-            # Fallback if none returned
             if not highlights:
                 highlights = _heuristic_highlights(text)
 
@@ -416,6 +439,36 @@ async def scenarios():
             "hints": hints,
         })
     return clean
+
+@api_router.get("/community", response_model=CommunityStatus)
+async def get_community():
+    doc = await db.community.find_one({"id": "community_main"}, {"_id": 0})
+    if not doc:
+        # ensure seed default
+        doc = {"community_total": 0, "monthly_goal": 5000}
+        try:
+            await db.community.update_one({"id": "community_main"}, {"$setOnInsert": {"total_points": 0, "monthly_goal": 5000, "updated_at": _safe_now().isoformat()}}, upsert=True)
+        except Exception:
+            pass
+    return CommunityStatus(community_total=int(doc.get("total_points", 0)), monthly_goal=int(doc.get("monthly_goal", 5000)))
+
+@api_router.post("/points/award", response_model=AwardResponse)
+async def award_points(req: AwardRequest):
+    # Input guard
+    pts = int(req.points)
+    if pts < 1 or pts > 100:
+        raise HTTPException(status_code=400, detail="points must be 1..100")
+    try:
+        res = await db.community.update_one(
+            {"id": "community_main"},
+            {"$inc": {"total_points": pts}, "$setOnInsert": {"monthly_goal": 5000}, "$set": {"updated_at": _safe_now().isoformat()}},
+            upsert=True,
+        )
+        doc = await db.community.find_one({"id": "community_main"}, {"_id": 0})
+        return AwardResponse(community_total=int(doc.get("total_points", 0)), monthly_goal=int(doc.get("monthly_goal", 5000)))
+    except Exception as e:
+        logger.error(f"Award points failed: {e}")
+        raise HTTPException(status_code=500, detail="award failed")
 
 # Mount router
 app.include_router(api_router)

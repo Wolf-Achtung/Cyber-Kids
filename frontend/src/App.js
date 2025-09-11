@@ -9,6 +9,8 @@ import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Badge } from "./components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./components/ui/accordion";
+import { Checkbox } from "./components/ui/checkbox";
+import { Progress } from "./components/ui/progress";
 import { Toaster } from "sonner";
 import { toast } from "sonner";
 import { ShieldCheck, AlertTriangle, MessageCircle, Send } from "lucide-react";
@@ -20,6 +22,50 @@ function riskClass(score) {
   if (score >= 0.7) return "high";
   if (score >= 0.4) return "mid";
   return "low";
+}
+
+function usePoints() {
+  const [userPoints, setUserPoints] = useState(() => Number(localStorage.getItem("cgk_points") || 0));
+  const [badges, setBadges] = useState(() => JSON.parse(localStorage.getItem("cgk_badges") || "[]"));
+  const [community, setCommunity] = useState({ community_total: 0, monthly_goal: 5000 });
+
+  const thresholds = [
+    { pts: 50, name: "Safety‑Starter" },
+    { pts: 150, name: "Teamplayer" },
+    { pts: 300, name: "Aufmerksam" },
+  ];
+
+  const refreshCommunity = async () => {
+    try {
+      const { data } = await axios.get(`${API}/community`);
+      setCommunity(data);
+    } catch { /* silent */ }
+  };
+
+  useEffect(() => { refreshCommunity(); }, []);
+
+  const computeBadges = (pts) => {
+    const earned = thresholds.filter(t => pts >= t.pts).map(t => t.name);
+    return Array.from(new Set(earned));
+  };
+
+  const award = async (points, reason) => {
+    const safe = Math.max(1, Math.min(100, Number(points || 0)));
+    const next = userPoints + safe;
+    const nextBadges = computeBadges(next);
+    setUserPoints(next);
+    setBadges(nextBadges);
+    localStorage.setItem("cgk_points", String(next));
+    localStorage.setItem("cgk_badges", JSON.stringify(nextBadges));
+    // Update community
+    try {
+      const { data } = await axios.post(`${API}/points/award`, { points: safe, reason });
+      setCommunity(data);
+    } catch { /* ignore transient */ }
+    toast.success(`+${safe} Punkte`);
+  };
+
+  return { userPoints, badges, community, award };
 }
 
 function HighlightedText({ text, highlights }) {
@@ -151,7 +197,7 @@ function ChatCheck() {
   );
 }
 
-function Lernhub() {
+function Lernhub({ award }) {
   const [guides, setGuides] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -168,6 +214,13 @@ function Lernhub() {
     };
     run();
   }, []);
+
+  const isLearned = (gid, idx) => localStorage.getItem(`cgk_learned_${gid}_${idx}`) === "1";
+  const markLearned = async (gid, idx) => {
+    if (isLearned(gid, idx)) return;
+    localStorage.setItem(`cgk_learned_${gid}_${idx}`, "1");
+    await award(10, "learn_module");
+  };
 
   return (
     <div className="section">
@@ -186,6 +239,11 @@ function Lernhub() {
                     <AccordionTrigger>{s.title}</AccordionTrigger>
                     <AccordionContent>
                       <p className="whitespace-pre-wrap leading-7">{s.content}</p>
+                      <div className="actions mt-3">
+                        <Button variant="secondary" disabled={isLearned(g.id, idx)} onClick={() => markLearned(g.id, idx)}>
+                          {isLearned(g.id, idx) ? "Abgeschlossen" : "Als gelernt markieren (+10)"}
+                        </Button>
+                      </div>
                     </AccordionContent>
                   </AccordionItem>
                 ))}
@@ -198,9 +256,11 @@ function Lernhub() {
   );
 }
 
-function Report() {
+function Report({ award }) {
   const [text, setText] = useState("");
   const [contact, setContact] = useState("");
+  const [steps, setSteps] = useState({ s1: false, s2: false, s3: false, s4: false });
+
   const submit = async () => {
     if (!text.trim()) return toast.error("Bitte beschreibe kurz den Vorfall.");
     try {
@@ -213,11 +273,22 @@ function Report() {
     }
   };
 
-  const steps = useMemo(() => [
-    { icon: "📸", title: "Beweise sichern", text: "Screenshots/Chatverlauf sichern." },
-    { icon: "🚫", title: "Blockieren & Melden", text: "Im jeweiligen Dienst blockieren und melden." },
-    { icon: "👨‍👩‍👧", title: "Vertrauensperson", text: "Mit Eltern/Lehrkraft/Beratungsstelle sprechen." },
-    { icon: "👮", title: "Polizei/110", text: "Bei akuter Gefahr sofort 110 anrufen." },
+  const allChecked = steps.s1 && steps.s2 && steps.s3 && steps.s4;
+  const checklistAwarded = localStorage.getItem("cgk_checklist_awarded") === "1";
+  const tryAwardChecklist = async () => {
+    if (allChecked && !checklistAwarded) {
+      localStorage.setItem("cgk_checklist_awarded", "1");
+      await award(15, "safety_checklist");
+    }
+  };
+
+  useEffect(() => { tryAwardChecklist(); }, [steps]);
+
+  const rows = useMemo(() => [
+    { key: "s1", label: "Screenshots/Chatverlauf gesichert" },
+    { key: "s2", label: "Kontakt blockiert und gemeldet" },
+    { key: "s3", label: "Mit Vertrauensperson gesprochen" },
+    { key: "s4", label: "Bei Gefahr: 110 in Erwägung gezogen" },
   ], []);
 
   return (
@@ -241,22 +312,32 @@ function Report() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Nächste Schritte</CardTitle>
-          <CardDescription>Konkrete, direkt umsetzbare Hinweise</CardDescription>
+          <CardTitle>Checkliste “Sichere Schritte”</CardTitle>
+          <CardDescription>Hake die Schritte ab – das hilft dir und bringt Punkte.</CardDescription>
         </CardHeader>
         <CardContent>
           <ul className="steps">
-            {steps.map((s, i) => (
-              <li key={i}><span className="step-emoji">{s.icon}</span><strong>{s.title}:</strong> {s.text}</li>
+            {rows.map((r) => (
+              <li key={r.key} className="step-row">
+                <Checkbox id={r.key} checked={steps[r.key]} onCheckedChange={(v) => setSteps((s) => ({ ...s, [r.key]: Boolean(v) }))} />
+                <label htmlFor={r.key}>{r.label}</label>
+              </li>
             ))}
           </ul>
+          <div className="mt-3">
+            {allChecked ? (
+              <span className="pill ok">Checkliste abgeschlossen {checklistAwarded ? "(bereits gutgeschrieben)" : "+15"}</span>
+            ) : (
+              <span className="muted">Vervollständige alle Schritte (+15 Punkte)</span>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function Simulator() {
+function Simulator({ award }) {
   const [scenarios, setScenarios] = useState([]);
   const [idx, setIdx] = useState(0);
   const [reply, setReply] = useState("");
@@ -281,6 +362,12 @@ function Simulator() {
     try {
       const { data } = await axios.post(`${API}/classify`, { text: reply });
       setFeedback(data);
+      // Punkte einmal pro Szenario vergeben
+      const key = `cgk_sim_award_${current?.id}`;
+      if (current && !localStorage.getItem(key)) {
+        localStorage.setItem(key, "1");
+        await award(10, "simulator_answer");
+      }
     } catch (e) {
       toast.error("Auswertung fehlgeschlagen");
     }
@@ -302,7 +389,7 @@ function Simulator() {
               <div className="bubble incoming">{current.message}</div>
               <div className="bubble me">
                 <Textarea value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Deine sichere Antwort…" />
-                <div className="actions"><Button onClick={evaluate}>Antwort prüfen</Button></div>
+                <div className="actions"><Button onClick={evaluate}>Antwort prüfen (+10)</Button></div>
               </div>
             </CardContent>
           </Card>
@@ -341,29 +428,48 @@ function Simulator() {
   );
 }
 
+function AppHeader({ userPoints, badges, community }) {
+  const pct = Math.min(100, Math.round((community.community_total / (community.monthly_goal || 1)) * 100));
+  return (
+    <header className="hero">
+      <div className="hero-inner">
+        <div>
+          <h1>CyberGuard Kids</h1>
+          <p>Schützt Kinder & Jugendliche vor Cybergrooming – prüfen, lernen, melden, trainieren.</p>
+          <div className="stats">
+            <div className="stat">
+              <span className="muted">Dein Punktestand</span>
+              <div className="score">{userPoints} Punkte</div>
+              <div className="badge-row">
+                {badges.length === 0 ? <span className="muted small">Sammle Punkte, um Badges freizuschalten</span> : badges.map((b) => (
+                  <span key={b} className="mini-badge">{b}</span>
+                ))}
+              </div>
+            </div>
+            <div className="stat">
+              <span className="muted">Community‑Ziel</span>
+              <Progress value={pct} className="progress" />
+              <div className="muted small">{community.community_total} / {community.monthly_goal} Punkte</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
 function App() {
-  const [health, setHealth] = useState(null);
+  const { userPoints, badges, community, award } = usePoints();
+
   useEffect(() => {
-    axios.get(`${API}/health`).then(({ data }) => setHealth(data)).catch(() => setHealth({ status: "error" }));
+    // ping health, optional
+    axios.get(`${API}/health`).catch(() => {});
   }, []);
 
   return (
     <div className="app-root">
       <Toaster richColors position="top-center" />
-      <header className="hero">
-        <div className="hero-inner">
-          <div>
-            <h1>CyberGuard Kids</h1>
-            <p>Schützt Kinder & Jugendliche vor Cybergrooming – prüfen, lernen, melden, trainieren.</p>
-            {health && (
-              <div className="health">
-                <span className={`pill ${health.llm_ready ? "ok" : "warn"}`}>KI {health.llm_ready ? "aktiv" : "inaktiv"}</span>
-                <span className="pill">Backend {health.status}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
+      <AppHeader userPoints={userPoints} badges={badges} community={community} />
 
       <main className="container">
         <Tabs defaultValue="check">
@@ -374,9 +480,9 @@ function App() {
             <TabsTrigger value="sim">Simulator</TabsTrigger>
           </TabsList>
           <TabsContent value="check"><ChatCheck /></TabsContent>
-          <TabsContent value="learn"><Lernhub /></TabsContent>
-          <TabsContent value="report"><Report /></TabsContent>
-          <TabsContent value="sim"><Simulator /></TabsContent>
+          <TabsContent value="learn"><Lernhub award={award} /></TabsContent>
+          <TabsContent value="report"><Report award={award} /></TabsContent>
+          <TabsContent value="sim"><Simulator award={award} /></TabsContent>
         </Tabs>
       </main>
 
