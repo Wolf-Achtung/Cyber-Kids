@@ -213,7 +213,6 @@ function ChatCheck({ sharePayload }) {
         analyze(incomingText);
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharePayload]);
 
   return (
