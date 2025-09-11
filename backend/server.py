@@ -327,12 +327,12 @@ async def classify(req: ClassificationRequest):
 
 @api_router.get("/guides", response_model=List[Guide])
 async def get_guides():
-    items = await db.guides.find().to_list(20)
+    items = await db.guides.find({}, {"_id": 0}).to_list(20)
     guides: List[Guide] = []
     for g in items:
         try:
             sections = [GuideSection(**s) for s in g.get("sections", [])]
-            guides.append(Guide(id=g["id"], title=g.get("title", "Guide"), sections=sections))
+            guides.append(Guide(id=g.get("id"), title=g.get("title", "Guide"), sections=sections))
         except Exception:
             continue
     # If empty, provide minimal built-in tips
