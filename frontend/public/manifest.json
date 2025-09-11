@@ -1,0 +1,20 @@
+{
+  "name": "CyberGuard Kids",
+  "short_name": "CyberGuard",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#18b692",
+  "description": "Schützt Kinder & Jugendliche vor Cybergrooming – prüfen, lernen, melden, trainieren.",
+  "icons": [],
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}
