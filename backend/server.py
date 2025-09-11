@@ -155,7 +155,7 @@ async def initialize_seed_data():
                     "id": str(uuid.uuid4()),
                     "title": "Unbekannte Freundschaftsanfrage",
                     "message": "Hey, sag mal wie alt bist du? Schickst du mir ein Foto nur für mich?",
-                    "hints": ["Fragen nach Alter &amp; Fotos", "Privat &amp; geheim"],
+                    "hints": ["Fragen nach Alter & Fotos", "Privat & geheim"],
                 },
                 {
                     "id": str(uuid.uuid4()),
