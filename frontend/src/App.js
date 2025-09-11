@@ -90,7 +90,7 @@ function usePoints() {
       const { data } = await axios.post(`${API}/points/award`, { points: safe, reason });
       setCommunity(data);
     } catch { /* ignore transient */ }
-    toast.success(`+${safe} Punkte`);
+    toast.info(`+${safe} Punkte`);
   };
 
   return { userPoints, badges, community, award };
@@ -160,10 +160,11 @@ function HighlightedText({ text, highlights }) {
   );
 }
 
-function ChatCheck() {
+function ChatCheck({ sharePayload }) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [shareAnalyzed, setShareAnalyzed] = useState(false);
 
   const copySuggested = async () => {
     if (!result?.suggested_reply) return;
@@ -181,12 +182,13 @@ function ChatCheck() {
     } catch { /* cancelled */ }
   };
 
-  const analyze = async () => {
-    if (!text.trim()) return;
+  const analyze = async (customText) => {
+    const payload = typeof customText === 'string' ? customText : text;
+    if (!payload.trim()) return;
     setLoading(true);
     setResult(null);
     try {
-      const { data } = await axios.post(`${API}/classify`, { text });
+      const { data } = await axios.post(`${API}/classify`, { text: payload });
       setResult(data);
       const lvl = data.overall_risk_score;
       if (lvl >= 0.7) toast.error("Hohes Risiko erkannt. Vorsicht!");
@@ -200,15 +202,32 @@ function ChatCheck() {
     }
   };
 
+  // Share intake handling
+  useEffect(() => {
+    if (!sharePayload?.via) return;
+    const incomingText = sharePayload.text || "";
+    if (incomingText) {
+      setText(incomingText);
+      if (sharePayload.autoAnalyze) {
+        setShareAnalyzed(true);
+        analyze(incomingText);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharePayload]);
+
   return (
     <div className="section">
       <div className="panel">
         <div className="panel-left">
           <h2 className="section-title"><ShieldCheck size={22} /> Chat-Check</h2>
+          {sharePayload?.via && (
+            <div className="sharebar ok">{shareAnalyzed ? "Geteilte Nachricht analysiert" : "Geteilter Link eingefügt"}</div>
+          )}
           <p className="muted">Füge eine Nachricht ein. Wir prüfen sie auf Cybergrooming-Risiken und schlagen eine kindersichere Antwort vor.</p>
           <Textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Hier Text einfügen oder tippen..." rows={8} />
           <div className="actions">
-            <Button onClick={analyze} disabled={loading || !text.trim()}>
+            <Button onClick={() => analyze()} disabled={loading || !text.trim()}>
               <Send size={16} className="mr-2" /> {loading ? "Analysiere..." : "Analysieren"}
             </Button>
           </div>
@@ -691,9 +710,30 @@ function AppHeader({ userPoints, badges, community }) {
 
 function App() {
   const { userPoints, badges, community, award } = usePoints();
+  const [sharePayload, setSharePayload] = useState(null);
 
   useEffect(() => {
     axios.get(`${API}/health`).catch(() => {});
+    // Share Target intake
+    try {
+      const sp = new URLSearchParams(window.location.search || "");
+      const rawText = sp.get("text");
+      const rawUrl = sp.get("url");
+      if (rawText || rawUrl) {
+        let t = rawText || "";
+        let u = rawUrl || "";
+        try { t = rawText ? decodeURIComponent(rawText) : t; } catch {}
+        try { u = rawUrl ? decodeURIComponent(rawUrl) : u; } catch {}
+        const textCombined = t || (u ? u : "");
+        const payload = { via: true, text: textCombined, autoAnalyze: Boolean(t) };
+        setSharePayload(payload);
+        // Mini-Toast-Leiste oben
+        toast.info("Über Teilen geöffnet");
+        // Clean URL
+        const cleanUrl = window.location.origin + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    } catch {}
   }, []);
 
   return (
@@ -709,7 +749,7 @@ function App() {
             <TabsTrigger value="report">Melden</TabsTrigger>
             <TabsTrigger value="sim">Simulator</TabsTrigger>
           </TabsList>
-          <TabsContent value="check"><ChatCheck /></TabsContent>
+          <TabsContent value="check"><ChatCheck sharePayload={sharePayload} /></TabsContent>
           <TabsContent value="learn"><Lernhub award={award} /></TabsContent>
           <TabsContent value="report"><Report award={award} /></TabsContent>
           <TabsContent value="sim"><Simulator award={award} /></TabsContent>
