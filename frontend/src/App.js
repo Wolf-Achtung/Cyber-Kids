@@ -11,9 +11,13 @@ import { Badge } from "./components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./components/ui/accordion";
 import { Checkbox } from "./components/ui/checkbox";
 import { Progress } from "./components/ui/progress";
+import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from "./components/ui/drawer";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "./components/ui/dialog";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
 import { Toaster } from "sonner";
 import { toast } from "sonner";
-import { ShieldCheck, AlertTriangle, MessageCircle, Send } from "lucide-react";
+import { ShieldCheck, AlertTriangle, MessageCircle, Send, Phone, Share2, Copy, Shield, FileText, X } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -47,7 +51,7 @@ function usePoints() {
   const computeBadges = (pts) => {
     const earned = thresholds.filter(t => pts >= t.pts).map(t => t.name);
     return Array.from(new Set(earned));
-  };
+    };
 
   const award = async (points, reason) => {
     const safe = Math.max(1, Math.min(100, Number(points || 0)));
@@ -57,7 +61,6 @@ function usePoints() {
     setBadges(nextBadges);
     localStorage.setItem("cgk_points", String(next));
     localStorage.setItem("cgk_badges", JSON.stringify(nextBadges));
-    // Update community
     try {
       const { data } = await axios.post(`${API}/points/award`, { points: safe, reason });
       setCommunity(data);
@@ -66,6 +69,23 @@ function usePoints() {
   };
 
   return { userPoints, badges, community, award };
+}
+
+function useTrustedContacts() {
+  const [c1Name, setC1Name] = useState(localStorage.getItem("cgk_c1_name") || "Mama/Papa");
+  const [c1Tel, setC1Tel] = useState(localStorage.getItem("cgk_c1_tel") || "");
+  const [c2Name, setC2Name] = useState(localStorage.getItem("cgk_c2_name") || "Lehrkraft");
+  const [c2Tel, setC2Tel] = useState(localStorage.getItem("cgk_c2_tel") || "");
+
+  const save = () => {
+    localStorage.setItem("cgk_c1_name", c1Name);
+    localStorage.setItem("cgk_c1_tel", c1Tel);
+    localStorage.setItem("cgk_c2_name", c2Name);
+    localStorage.setItem("cgk_c2_tel", c2Tel);
+    toast.success("Kontakte gespeichert");
+  };
+
+  return { c1Name, c1Tel, c2Name, c2Tel, setC1Name, setC1Tel, setC2Name, setC2Tel, save };
 }
 
 function HighlightedText({ text, highlights }) {
@@ -110,6 +130,22 @@ function ChatCheck() {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+
+  const copySuggested = async () => {
+    if (!result?.suggested_reply) return;
+    try { await navigator.clipboard.writeText(result.suggested_reply); toast.success("Antwort kopiert"); } catch { toast.error("Kopieren nicht möglich"); }
+  };
+  const shareSuggested = async () => {
+    if (!result?.suggested_reply) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({ text: result.suggested_reply });
+      } else {
+        await navigator.clipboard.writeText(result.suggested_reply);
+        toast.success("In Zwischenablage kopiert");
+      }
+    } catch { /* cancelled */ }
+  };
 
   const analyze = async () => {
     if (!text.trim()) return;
@@ -183,7 +219,13 @@ function ChatCheck() {
 
                   <div className="suggestion">
                     <h4>Sichere Antwort</h4>
-                    <Card className="reply"><CardContent className="p-4">{result.suggested_reply}</CardContent></Card>
+                    <Card className="reply"><CardContent className="p-4">
+                      {result.suggested_reply}
+                      <div className="reply-actions">
+                        <Button size="sm" variant="secondary" onClick={copySuggested}><Copy size={14} className="mr-1"/>Kopieren</Button>
+                        <Button size="sm" onClick={shareSuggested}><Share2 size={14} className="mr-1"/>Teilen</Button>
+                      </div>
+                    </CardContent></Card>
                   </div>
 
                   <div className="meta">Dauer: {result.processing_time.toFixed(2)}s</div>
@@ -282,6 +324,25 @@ function Report({ award }) {
     }
   };
 
+  const exportNote = () => {
+    const ts = new Date().toISOString();
+    const lines = [
+      `Zeit: ${ts}`,
+      `Beschreibung: ${text.replace(/\n/g, ' ')}`,
+      `Schritte:`,
+      ` - Screenshots: ${steps.s1 ? 'ja' : 'nein'}`,
+      ` - Blockiert/Gemeldet: ${steps.s2 ? 'ja' : 'nein'}`,
+      ` - Vertrauensperson: ${steps.s3 ? 'ja' : 'nein'}`,
+      ` - 110 erwogen: ${steps.s4 ? 'ja' : 'nein'}`,
+    ].join("\n");
+    const blob = new Blob([lines], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `Vorfall-Notiz-${ts.slice(0,19).replace(/[:T]/g,'-')}.txt`; a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Notiz exportiert");
+  };
+
   useEffect(() => { tryAwardChecklist(); }, [steps]);
 
   const rows = useMemo(() => [
@@ -324,7 +385,8 @@ function Report({ award }) {
               </li>
             ))}
           </ul>
-          <div className="mt-3">
+          <div className="mt-3 actions">
+            <Button variant="secondary" onClick={exportNote}><FileText size={16} className="mr-1"/>Notiz exportieren</Button>
             {allChecked ? (
               <span className="pill ok">Checkliste abgeschlossen {checklistAwarded ? "(bereits gutgeschrieben)" : "+15"}</span>
             ) : (
@@ -362,7 +424,6 @@ function Simulator({ award }) {
     try {
       const { data } = await axios.post(`${API}/classify`, { text: reply });
       setFeedback(data);
-      // Punkte einmal pro Szenario vergeben
       const key = `cgk_sim_award_${current?.id}`;
       if (current && !localStorage.getItem(key)) {
         localStorage.setItem(key, "1");
@@ -428,6 +489,79 @@ function Simulator({ award }) {
   );
 }
 
+function EmergencyControls() {
+  const { c1Name, c1Tel, c2Name, c2Tel, setC1Name, setC1Tel, setC2Name, setC2Tel, save } = useTrustedContacts();
+  const [open, setOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+
+  const quickExit = () => {
+    // Panik: Leite auf neutrale Seite um
+    window.location.href = "https://www.wikipedia.org";
+  };
+
+  return (
+    <>
+      <Button className="panic" onClick={() => setOpen(true)}><Shield size={16} className="mr-2"/>Was jetzt?</Button>
+      <Drawer open={open} onOpenChange={setOpen}>
+        <DrawerContent className="drawer">
+          <DrawerHeader>
+            <DrawerTitle>Schnelle Hilfe</DrawerTitle>
+          </DrawerHeader>
+          <div className="drawer-grid">
+            <a className="action-card" href="tel:110"><Phone size={18}/>110 anrufen</a>
+            <a className="action-card" href={c1Tel ? `tel:${c1Tel}` : "#"} onClick={(e) => { if (!c1Tel) { e.preventDefault(); toast.warning("Kontakt 1 nicht gesetzt"); } }}>
+              <Phone size={18}/>{c1Name}
+            </a>
+            <a className="action-card" href={c2Tel ? `tel:${c2Tel}` : "#"} onClick={(e) => { if (!c2Tel) { e.preventDefault(); toast.warning("Kontakt 2 nicht gesetzt"); } }}>
+              <Phone size={18}/>{c2Name}
+            </a>
+            <button className="action-card" onClick={quickExit}><X size={18}/>Schnell beenden</button>
+          </div>
+
+          <div className="drawer-sec">
+            <h4>Blockieren & Beweise sichern</h4>
+            <ul>
+              <li>1) Screenshot/Chatverlauf sichern</li>
+              <li>2) Kontakt blockieren und im Dienst melden</li>
+              <li>3) Mit Vertrauensperson sprechen</li>
+            </ul>
+          </div>
+
+          <DrawerFooter>
+            <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+              <DialogTrigger asChild>
+                <Button variant="secondary">Kontakte verwalten</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Vertrauenspersonen</DialogTitle></DialogHeader>
+                <div className="grid2">
+                  <div>
+                    <Label htmlFor="c1n">Name 1</Label>
+                    <Input id="c1n" value={c1Name} onChange={(e) => setC1Name(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label htmlFor="c1t">Telefon 1</Label>
+                    <Input id="c1t" value={c1Tel} onChange={(e) => setC1Tel(e.target.value)} placeholder="z. B. 0151…" />
+                  </div>
+                  <div>
+                    <Label htmlFor="c2n">Name 2</Label>
+                    <Input id="c2n" value={c2Name} onChange={(e) => setC2Name(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label htmlFor="c2t">Telefon 2</Label>
+                    <Input id="c2t" value={c2Tel} onChange={(e) => setC2Tel(e.target.value)} placeholder="z. B. 0176…" />
+                  </div>
+                </div>
+                <div className="actions mt-3"><Button onClick={() => { save(); setManageOpen(false); }}>Speichern</Button></div>
+              </DialogContent>
+            </Dialog>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+    </>
+  );
+}
+
 function AppHeader({ userPoints, badges, community }) {
   const pct = Math.min(100, Math.round((community.community_total / (community.monthly_goal || 1)) * 100));
   return (
@@ -453,6 +587,7 @@ function AppHeader({ userPoints, badges, community }) {
             </div>
           </div>
         </div>
+        <EmergencyControls />
       </div>
     </header>
   );
@@ -462,7 +597,6 @@ function App() {
   const { userPoints, badges, community, award } = usePoints();
 
   useEffect(() => {
-    // ping health, optional
     axios.get(`${API}/health`).catch(() => {});
   }, []);
 
