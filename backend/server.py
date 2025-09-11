@@ -364,12 +364,21 @@ async def create_report(r: ReportCreate):
 
 @api_router.get("/simulator/scenarios")
 async def scenarios():
-    items = await db.simulator_scenarios.find().to_list(50)
+    items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
     # Fallback if not seeded yet
     if not items:
         await initialize_seed_data()
-        items = await db.simulator_scenarios.find().to_list(50)
-    return items
+        items = await db.simulator_scenarios.find({}, {"_id": 0}).to_list(50)
+    # Ensure plain JSONable dicts
+    clean = []
+    for it in items:
+        clean.append({
+            "id": it.get("id"),
+            "title": it.get("title"),
+            "message": it.get("message"),
+            "hints": it.get("hints", []),
+        })
+    return clean
 
 # Include router
 app.include_router(api_router)
