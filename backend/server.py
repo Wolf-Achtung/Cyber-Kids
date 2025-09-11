@@ -123,7 +123,7 @@ async def _import_docx_from_url(url: str) -> Optional[Guide]:
             if not txt:
                 continue
             # naive heading detection: uppercase lines as section headers
-            if len(txt) &lt;= 100 and txt.isupper():
+            if len(txt) <= 100 and txt.isupper():
                 if current_content:
                     sections.append(GuideSection(title=current_title, content='\n'.join(current_content)))
                     current_content = []
