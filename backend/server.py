@@ -10,6 +10,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import asyncio
+from contextlib import asynccontextmanager
 
 # Optional OpenAI integration
 try:
@@ -25,8 +26,17 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
+# Lifespan context manager for startup/shutdown events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize seed data
+    asyncio.create_task(initialize_seed_data())
+    yield
+    # Shutdown: Close MongoDB client
+    client.close()
+
 # FastAPI app + router with '/api'
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 # CORS (env-driven)
@@ -472,11 +482,3 @@ async def award_points(req: AwardRequest):
 
 # Mount router
 app.include_router(api_router)
-
-@app.on_event("startup")
-async def on_startup():
-    asyncio.create_task(initialize_seed_data())
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()

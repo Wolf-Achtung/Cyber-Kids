@@ -1,0 +1,36 @@
+# Dependencies
+node_modules
+package-lock.json
+yarn.lock
+
+# Build outputs
+build
+dist
+.next
+out
+
+# Cache directories
+.cache
+.vscode
+.idea
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__
+*.pyc
+venv
+.venv
+
+# Git
+.git
